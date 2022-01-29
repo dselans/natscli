@@ -73,16 +73,16 @@ func configureBenchCommand(app commandHost) {
 	bench.Flag("reply", "Request/Reply mode: subscribers send replies").Default("false").BoolVar(&c.reply)
 	bench.Flag("js", "Use JetStream streaming").Default("false").BoolVar(&c.js)
 	bench.Flag("pubbatch", "Sets the batch size for JS asynchronous publishing").Default("100").IntVar(&c.pubBatch)
-	bench.Flag("pull", "Uses a durable explicitly acknowledged pull consumer").Default("false").BoolVar(&c.pull)
-	bench.Flag("pullbatch", "Sets the batch size for the JS pull consumer").Default("100").IntVar(&c.pullBatch)
+	bench.Flag("pull", "Use a shared durable explicitly acknowledged JS pull consumer rather than individual ephemeral consumers").Default("false").BoolVar(&c.pull)
+	bench.Flag("push", "Use a shared durable explicitly acknowledged JS push consumer with a queue group rather than individual ephemeral consumers").Default("false").BoolVar(&c.pushDurable)
+	bench.Flag("pullbatch", "Sets the batch size for the JS durable pull consumer, or the max ack pending value for the JS durable push consumer").Default("100").IntVar(&c.pullBatch)
 	bench.Flag("jstimeout", "Timeout for JS operations").Default("30s").DurationVar(&c.jsTimeout)
 	bench.Flag("purge", "Purge the stream before running").Default("false").BoolVar(&c.purge)
-	bench.Flag("stream", "When set to something else than \"benchstream\": use and do not define the specified stream when creating pull subscribers. Otherwise define and use the \"benchstream\" stream").Default(DEFAULT_STREAM_NAME).StringVar(&c.streamName)
+	bench.Flag("stream", "When set to something else than \"benchstream\": use (and do not attempt to define) the specified stream when creating durable subscribers. Otherwise define and use the \"benchstream\" stream").Default(DEFAULT_STREAM_NAME).StringVar(&c.streamName)
 	bench.Flag("storage", "JetStream storage (memory/file) for the \"benchstream\" stream").Default("memory").StringVar(&c.storage)
 	bench.Flag("replicas", "Number of stream replicas for the \"benchstream\" stream").Default("1").IntVar(&c.replicas)
 	bench.Flag("acksleep", "Sleep for the specified interval before sending JetStream pull consumer acks, or replies in --reply mode").Default("0s").DurationVar(&c.ackSleep)
 	bench.Flag("pubsleep", "Sleep for the specified interval after publishing each message").Default("0s").DurationVar(&c.pubSleep)
-	bench.Flag("push", "Use a durable explicitly acknowledged push consumer with a queue group").Default("false").BoolVar(&c.pushDurable)
 	bench.Flag("consumername", "Specify the durable consumer name to use").Default(DEFAULT_DURABLE_CONSUMER_NAME).StringVar(&c.consumerName)
 
 	cheats["bench"] = `# benchmark core nats publish and subscribe with 10 publishers and subscribers
@@ -264,7 +264,7 @@ func (c *benchCmd) bench(_ *kingpin.ParseContext) error {
 					DeliverPolicy:  nats.DeliverAllPolicy,
 					AckPolicy:      nats.AckExplicitPolicy,
 					ReplayPolicy:   nats.ReplayInstantPolicy,
-					MaxAckPending:  20000 * c.numSubs,
+					MaxAckPending:  c.pullBatch * c.numSubs,
 				})
 				if err != nil {
 					log.Fatal("error creating the durable push consumer: ", err)
@@ -560,6 +560,8 @@ func (c *benchCmd) runSubscriber(bm *bench.Benchmark, nc *nats.Conn, startwg *sy
 			if err != nil {
 				log.Fatalf("Error push durable Subscribe=" + err.Error())
 			}
+			_ = sub.AutoUnsubscribe(numMsg)
+
 		} else {
 			state = "Consuming "
 			// ordered push consumer
@@ -627,6 +629,8 @@ func (c *benchCmd) runSubscriber(bm *bench.Benchmark, nc *nats.Conn, startwg *sy
 
 	start := <-ch
 	end := <-ch
+
+	_ = sub.Drain()
 
 	state = "Finished  "
 
